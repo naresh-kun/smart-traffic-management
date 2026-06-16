@@ -1,0 +1,34 @@
+# ============================================================
+# Smart Traffic Management System – Requirements
+# ============================================================
+# Install with: pip install -r requirements.txt
+# Python version: 3.10+
+
+# --- Computer Vision ---
+opencv-python>=4.8.0
+ultralytics>=8.0.0          # YOLOv8 pretrained models
+
+# --- Data Processing ---
+numpy>=1.24.0
+pandas>=2.0.0
+
+# --- Dashboard ---
+streamlit>=1.28.0
+
+# --- Visualization ---
+matplotlib>=3.7.0
+plotly>=5.15.0
+
+# --- Machine Learning ---
+scikit-learn>=1.3.0
+
+# --- Database ---
+# SQLite is part of Python stdlib – no additional package needed
+
+# --- Configuration ---
+pyyaml>=6.0
+
+# --- Utilities ---
+Pillow>=10.0.0              # Image processing helpers
+python-dotenv>=1.0.0        # Optional env-var support
+loguru>=0.7.0               # Enhanced structured logging

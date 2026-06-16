@@ -1,0 +1,46 @@
+# Smart Traffic Management System – .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# YOLOv8 weights (large binaries – download on first run)
+models/yolov8/*.pt
+models/yolov8/*.onnx
+
+# SQLite database (generated data)
+data/logs/*.db
+
+# Log files
+data/logs/*.log
+
+# Results / output frames
+data/results/
+
+# Streamlit cache
+.streamlit/
+
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env

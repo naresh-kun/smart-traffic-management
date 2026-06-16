@@ -1,0 +1,81 @@
+# ============================================================
+# Smart Traffic Management System – Configuration
+# ============================================================
+# All configurable values must be sourced from this file.
+# No hardcoded constants are permitted in the source code.
+
+# --- Video / Camera Source ---
+video:
+  source: 0                       # 0 = webcam | path/to/video.mp4
+  frame_width: 1280
+  frame_height: 720
+  fps_target: 30
+  display_output: true            # Show annotated video window
+
+# --- Detection ---
+detection:
+  model_path: models/yolov8/yolov8n.pt   # Pretrained YOLOv8 nano weights
+  confidence_threshold: 0.45            # Minimum detection confidence
+  iou_threshold: 0.5                    # Non-max suppression IoU
+  target_classes:                       # COCO class IDs for vehicles
+    - 2    # car
+    - 3    # motorcycle
+    - 5    # bus
+    - 7    # truck
+  device: cpu                           # "cpu" or "cuda"
+
+# --- Vehicle Counting ---
+counting:
+  enable_lane_counting: false           # Lane-wise count (future feature)
+  lane_count: 4
+  counting_line_position: 0.6          # Fraction of frame height
+
+# --- Traffic Analysis ---
+analysis:
+  density_area_sqm: 500.0              # Reference road area in sq-metres
+  history_window: 10                   # Frames to average for smoothing
+  congestion_thresholds:
+    low: 20       # vehicles
+    medium: 40
+    high: 60
+    # >60 = critical
+
+# --- Signal Controller ---
+signal:
+  min_green_seconds: 10
+  max_green_seconds: 120
+  yellow_duration_seconds: 3
+  red_min_seconds: 10
+  timing_map:                          # vehicles → green seconds
+    low: 20
+    medium: 40
+    high: 60
+    critical: 90
+
+# --- Congestion Predictor ---
+predictor:
+  model_type: random_forest            # "random_forest" | "decision_tree"
+  retrain_interval_frames: 500
+  min_samples_to_train: 50
+  n_estimators: 50                     # RF only
+  max_depth: 5
+
+# --- Database ---
+database:
+  path: data/logs/traffic_data.db
+  log_interval_seconds: 5             # How often to write a record
+
+# --- Dashboard ---
+dashboard:
+  refresh_interval_seconds: 2
+  chart_history_minutes: 30
+  page_title: "Smart Traffic Management System"
+  theme: dark
+
+# --- Logging ---
+logging:
+  level: INFO                         # DEBUG | INFO | WARNING | ERROR
+  log_dir: data/logs
+  log_file: traffic_system.log
+  rotation: "10 MB"
+  retention: "7 days"
