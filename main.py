@@ -19,6 +19,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+import cv2
+
 # ---------------------------------------------------------------------------
 # Internal imports (populated after skeletons are implemented)
 # ---------------------------------------------------------------------------
@@ -99,7 +101,7 @@ class TrafficManagementApp:
         headless: bool = False,
     ) -> None:
         self.config = config
-        self.source = source or config["video"]["source"]
+        self.source = source if source is not None else config["video"]["source"]
         self.headless = headless
 
         # Pipeline modules – initialised in setup()
@@ -120,10 +122,27 @@ class TrafficManagementApp:
         bool
             True if setup succeeded, False otherwise.
         """
-        # TODO: Instantiate each module with the relevant config section.
-        # TODO: Call detector.load_model() and detector.open_source(self.source).
-        # TODO: Return False if any critical step fails.
-        raise NotImplementedError("TODO: implement setup()")
+        from utils.helpers import ensure_dir, get_config_value
+        
+        # Ensure log directory exists
+        log_dir = get_config_value(self.config, "logging", "log_dir", default="data/logs")
+        ensure_dir(log_dir)
+
+        # Initialize VehicleDetector
+        self.detector = VehicleDetector(self.config)
+        
+        # Load YOLO model
+        if not self.detector.load_model():
+            logger.error("Failed to load YOLO model.")
+            return False
+            
+        # Open configured video source
+        if not self.detector.open_source(self.source):
+            logger.error(f"Failed to open video source: {self.source}")
+            return False
+            
+        logger.info("Setup complete. Video source opened successfully.")
+        return True
 
     def run(self) -> None:
         """Run the main frame-processing loop until the source is exhausted
@@ -140,19 +159,48 @@ class TrafficManagementApp:
         7. dashboard_data.update()
         8. Optional: display annotated frame
         """
-        # TODO: Implement the main processing loop.
-        # TODO: Log a summary at the end of the session.
-        raise NotImplementedError("TODO: implement run()")
+        logger.info("Starting processing loop. Press 'q' to exit.")
+        frames_processed = 0
+        window_name = "Smart Traffic Management"
+        
+        if not self.headless:
+            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+
+        while self.detector and self.detector.is_open:
+            ret, frame = self.detector.read_frame()
+            if not ret or frame is None:
+                logger.info("End of video stream or error reading frame.")
+                break
+                
+            detections = self.detector.detect_frame(frame)
+            
+            # TODO: Implement other pipeline steps here later
+            
+            if not self.headless:
+                annotated = self.detector.annotate_frame(frame, detections)
+                cv2.imshow(window_name, annotated)
+                
+                # Exit on 'q'
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    logger.info("Exit requested by user.")
+                    break
+                    
+            frames_processed += 1
+            
+        logger.info(f"Session ended. Processed {frames_processed} frames.")
 
     def teardown(self) -> None:
         """Release resources (camera, DB connections, etc.).
 
         Called automatically at the end of run() or on KeyboardInterrupt.
         """
-        # TODO: Call detector.release().
-        # TODO: Close database connection in dashboard_data.
-        # TODO: Log session end.
-        raise NotImplementedError("TODO: implement teardown()")
+        if self.detector:
+            self.detector.release()
+            
+        if not self.headless:
+            cv2.destroyAllWindows()
+            
+        logger.info("Application teardown complete.")
 
 
 # ---------------------------------------------------------------------------

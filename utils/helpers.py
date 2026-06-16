@@ -19,6 +19,7 @@ from typing import Any, Optional
 import yaml
 
 from utils.logger import get_logger
+from utils.constants import DB_DATETIME_FORMAT
 
 logger = get_logger(__name__)
 
@@ -53,9 +54,21 @@ def load_config(path: str = "config/config.yaml") -> dict:
     >>> config["video"]["source"]
     0
     """
-    # TODO: Open and parse the YAML file.
-    # TODO: Log success and return the dict.
-    raise NotImplementedError("TODO: implement load_config()")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+        
+        if not isinstance(config, dict):
+            config = {}
+            
+        logger.info(f"Loaded configuration from '{path}'")
+        return config
+    except FileNotFoundError:
+        logger.error(f"Configuration file not found: {path}")
+        raise
+    except yaml.YAMLError as exc:
+        logger.error(f"Error parsing YAML file '{path}': {exc}")
+        raise
 
 
 def get_config_value(config: dict, *keys: str, default: Any = None) -> Any:
@@ -80,8 +93,13 @@ def get_config_value(config: dict, *keys: str, default: Any = None) -> Any:
     >>> get_config_value(config, "detection", "confidence_threshold", default=0.5)
     0.45
     """
-    # TODO: Traverse config dict with the key sequence; return default on KeyError.
-    raise NotImplementedError("TODO: implement get_config_value()")
+    curr = config
+    for key in keys:
+        if isinstance(curr, dict) and key in curr:
+            curr = curr[key]
+        else:
+            return default
+    return curr
 
 
 # ---------------------------------------------------------------------------
@@ -96,8 +114,7 @@ def utc_now_iso() -> str:
     str
         Example: ``"2026-06-17T00:00:00.000000Z"``
     """
-    # TODO: Return datetime.now(timezone.utc).strftime(DB_DATETIME_FORMAT)
-    raise NotImplementedError("TODO: implement utc_now_iso()")
+    return datetime.now(timezone.utc).strftime(DB_DATETIME_FORMAT)
 
 
 def elapsed_seconds(start_time: float) -> float:
@@ -113,8 +130,7 @@ def elapsed_seconds(start_time: float) -> float:
     float
         Number of seconds elapsed.
     """
-    # TODO: return time.monotonic() - start_time
-    raise NotImplementedError("TODO: implement elapsed_seconds()")
+    return time.monotonic() - start_time
 
 
 # ---------------------------------------------------------------------------
@@ -129,8 +145,7 @@ def generate_session_id() -> str:
     str
         A UUID4 hex string.
     """
-    # TODO: return str(uuid.uuid4())
-    raise NotImplementedError("TODO: implement generate_session_id()")
+    return str(uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------
@@ -150,8 +165,9 @@ def ensure_dir(path: str) -> Path:
     Path
         Resolved ``pathlib.Path`` object.
     """
-    # TODO: p = Path(path); p.mkdir(parents=True, exist_ok=True); return p
-    raise NotImplementedError("TODO: implement ensure_dir()")
+    p = Path(path)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def resolve_video_source(source: Any) -> Any:
@@ -168,8 +184,12 @@ def resolve_video_source(source: Any) -> Any:
     int | str
         Integer if the source is a camera index, string path otherwise.
     """
-    # TODO: Try casting source to int; if it succeeds return int, else return str.
-    raise NotImplementedError("TODO: implement resolve_video_source()")
+    if isinstance(source, int):
+        return source
+    try:
+        return int(source)
+    except (ValueError, TypeError):
+        return str(source)
 
 
 # ---------------------------------------------------------------------------
@@ -193,8 +213,7 @@ def clamp(value: float, min_val: float, max_val: float) -> float:
     float
         The clamped value.
     """
-    # TODO: return max(min_val, min(value, max_val))
-    raise NotImplementedError("TODO: implement clamp()")
+    return max(min_val, min(value, max_val))
 
 
 def moving_average(history: list[float], window: int) -> float:
@@ -212,5 +231,7 @@ def moving_average(history: list[float], window: int) -> float:
     float
         The average, or 0.0 if ``history`` is empty.
     """
-    # TODO: Slice last `window` values and compute mean.
-    raise NotImplementedError("TODO: implement moving_average()")
+    if not history or window <= 0:
+        return 0.0
+    recent = history[-window:]
+    return sum(recent) / len(recent)

@@ -30,6 +30,7 @@ from pathlib import Path
 # Ensure project root is on the path when run via streamlit CLI
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# pyrefly: ignore [missing-import]
 import streamlit as st
 
 from utils.helpers import load_config
