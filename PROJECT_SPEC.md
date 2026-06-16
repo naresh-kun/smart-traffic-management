@@ -366,4 +366,18 @@ Generate:
 6. Sample dashboard.
 7. Example test files.
 
+## Team Responsibilities
+
+Backend + AI:
+- Vehicle Detector
+- Vehicle Counter
+- Traffic Analyzer
+- Signal Controller
+- Database Layer
+
+Frontend:
+- Streamlit Dashboard
+- Visualizations
+- User Controls
+
 Ensure the project runs immediately after dependency installation.

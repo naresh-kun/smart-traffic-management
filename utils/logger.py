@@ -15,6 +15,26 @@ from typing import Optional
 
 from loguru import logger as _loguru_logger
 
+# Track whether setup_logging() has been called so we can apply a sensible
+# default configuration on first ``get_logger()`` call.
+_is_configured: bool = False
+
+# Default console format – includes timestamp, level, bound module name, and message
+_CONSOLE_FORMAT = (
+    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+    "<level>{level: <8}</level> | "
+    "<cyan>{extra[module]}</cyan> | "
+    "<level>{message}</level>"
+)
+
+# File format – same content, no ANSI colour codes
+_FILE_FORMAT = (
+    "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
+    "{level: <8} | "
+    "{extra[module]} | "
+    "{message}"
+)
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -45,15 +65,59 @@ def setup_logging(
     retention : str
         How long completed log files are kept, e.g. ``"7 days"``.
     """
-    # TODO: Remove default Loguru sink.
-    # TODO: Add a console sink with colourised format.
-    # TODO: Create log_dir if it does not exist.
-    # TODO: Add a rotating file sink writing to log_dir/log_file.
-    # TODO: Set the minimum level on both sinks from the `level` parameter.
-    raise NotImplementedError("TODO: implement setup_logging()")
+    global _is_configured
+
+    # Remove all existing sinks (including the default stderr sink)
+    _loguru_logger.remove()
+
+    # Console sink – colourised
+    _loguru_logger.add(
+        sys.stderr,
+        format=_CONSOLE_FORMAT,
+        level=level.upper(),
+        colorize=True,
+    )
+
+    # File sink – rotating, no colours
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
+    _loguru_logger.add(
+        str(log_path / log_file),
+        format=_FILE_FORMAT,
+        level=level.upper(),
+        rotation=rotation,
+        retention=retention,
+        encoding="utf-8",
+    )
+
+    _is_configured = True
+    _loguru_logger.bind(module="logger").info(
+        f"Logging configured: level={level}, dir={log_dir}, file={log_file}"
+    )
 
 
-def get_logger(name: str) -> "loguru.Logger":  # type: ignore[name-defined]
+def _ensure_default_config() -> None:
+    """Apply a minimal default configuration if ``setup_logging()`` has not
+    been called yet.
+
+    This avoids ``KeyError`` on the ``module`` extra key when a module calls
+    ``get_logger()`` before the application entry point invokes
+    ``setup_logging()``.
+    """
+    global _is_configured
+    if not _is_configured:
+        # Remove the default Loguru sink and add one with our format
+        _loguru_logger.remove()
+        _loguru_logger.add(
+            sys.stderr,
+            format=_CONSOLE_FORMAT,
+            level="DEBUG",
+            colorize=True,
+        )
+        _is_configured = True
+
+
+def get_logger(name: str) -> "_loguru_logger.__class__":  # type: ignore[name-defined]
     """Return a Loguru logger bound with the caller's module name.
 
     Parameters
@@ -72,8 +136,8 @@ def get_logger(name: str) -> "loguru.Logger":  # type: ignore[name-defined]
     >>> logger = get_logger(__name__)
     >>> logger.info("Module started")
     """
-    # TODO: Return _loguru_logger.bind(module=name)
-    raise NotImplementedError("TODO: implement get_logger()")
+    _ensure_default_config()
+    return _loguru_logger.bind(module=name)
 
 
 def log_section_header(title: str) -> None:
@@ -87,5 +151,8 @@ def log_section_header(title: str) -> None:
     title : str
         Human-readable label for the section.
     """
-    # TODO: Log a formatted divider line at INFO level.
-    raise NotImplementedError("TODO: implement log_section_header()")
+    _ensure_default_config()
+    divider = "=" * 60
+    _loguru_logger.bind(module="system").info(divider)
+    _loguru_logger.bind(module="system").info(f"  {title}")
+    _loguru_logger.bind(module="system").info(divider)

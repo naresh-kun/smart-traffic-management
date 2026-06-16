@@ -20,14 +20,29 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
+import cv2
 import numpy as np
+from ultralytics import YOLO
 
 from utils.logger import get_logger
-from utils.constants import VehicleType, COCO_CLASS_ID_TO_VEHICLE_TYPE, BOUNDING_BOX_COLORS
+from utils.constants import (
+    VehicleType,
+    COCO_CLASS_ID_TO_VEHICLE_TYPE,
+    BOUNDING_BOX_COLORS,
+)
 
 logger = get_logger(__name__)
+
+# Thickness and font settings for annotation rendering (not user-facing
+# thresholds — purely cosmetic, so they live here rather than config.yaml).
+_BBOX_THICKNESS: int = 2
+_LABEL_FONT_SCALE: float = 0.55
+_LABEL_FONT: int = cv2.FONT_HERSHEY_SIMPLEX
+_LABEL_THICKNESS: int = 2
+_LABEL_BG_ALPHA: float = 0.6  # opacity of the label background rectangle
 
 
 # ---------------------------------------------------------------------------
@@ -74,13 +89,28 @@ class DetectedVehicle:
     def to_dict(self) -> dict:
         """Serialise the detection to a plain dictionary.
 
+        Returns a structure that matches the ``DetectedVehicle`` data
+        structure defined in ``API_CONTRACT.md``.
+
         Returns
         -------
         dict
-            JSON-serialisable representation matching the API contract.
+            JSON-serialisable representation with keys:
+            ``vehicle_type``, ``confidence``, ``position``,
+            ``frame_id``, ``timestamp``.
         """
-        # TODO: Return dict with vehicle_type, confidence, position, frame_id, timestamp.
-        raise NotImplementedError("TODO: implement to_dict()")
+        return {
+            "vehicle_type": str(self.vehicle_type.value),
+            "confidence": round(self.confidence, 4),
+            "position": {
+                "x1": self.x1,
+                "y1": self.y1,
+                "x2": self.x2,
+                "y2": self.y2,
+            },
+            "frame_id": self.frame_id,
+            "timestamp": self.timestamp,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +123,8 @@ class VehicleDetector:
     Parameters
     ----------
     config : dict
-        The ``detection`` and ``video`` sections of ``config.yaml``.
+        The full application configuration dictionary (or at least the
+        ``detection`` and ``video`` sections of ``config.yaml``).
 
     Example
     -------
@@ -109,22 +140,24 @@ class VehicleDetector:
 
     def __init__(self, config: dict) -> None:
         self._config = config
-        self._model = None          # ultralytics YOLO instance
-        self._cap = None            # cv2.VideoCapture instance
+        self._model: Optional[YOLO] = None
+        self._cap: Optional[cv2.VideoCapture] = None
         self._frame_id: int = 0
-        self._model_path: str = config.get("detection", {}).get(
+
+        # Pull detection settings from config with safe defaults
+        det_cfg = config.get("detection", {})
+        self._model_path: str = det_cfg.get(
             "model_path", "models/yolov8/yolov8n.pt"
         )
-        self._confidence_threshold: float = config.get("detection", {}).get(
+        self._confidence_threshold: float = det_cfg.get(
             "confidence_threshold", 0.45
         )
-        self._iou_threshold: float = config.get("detection", {}).get(
-            "iou_threshold", 0.5
+        self._iou_threshold: float = det_cfg.get("iou_threshold", 0.5)
+        self._device: str = det_cfg.get("device", "cpu")
+        self._target_class_ids: set[int] = set(
+            det_cfg.get("target_classes", [2, 3, 5, 7])
         )
-        self._device: str = config.get("detection", {}).get("device", "cpu")
-        self._target_class_ids: list[int] = config.get("detection", {}).get(
-            "target_classes", [2, 3, 5, 7]
-        )
+
         logger.info("VehicleDetector initialised.")
 
     # ------------------------------------------------------------------
@@ -142,10 +175,20 @@ class VehicleDetector:
         bool
             ``True`` if the model loaded successfully, ``False`` otherwise.
         """
-        # TODO: from ultralytics import YOLO
-        # TODO: self._model = YOLO(self._model_path)
-        # TODO: Log success or failure and return bool.
-        raise NotImplementedError("TODO: implement load_model()")
+        try:
+            logger.info(f"Loading YOLOv8 model from '{self._model_path}' ...")
+            self._model = YOLO(self._model_path)
+            logger.info(
+                f"YOLOv8 model loaded successfully "
+                f"(device={self._device}, "
+                f"conf_threshold={self._confidence_threshold}, "
+                f"iou_threshold={self._iou_threshold})."
+            )
+            return True
+        except Exception as exc:
+            logger.error(f"Failed to load YOLOv8 model: {exc}")
+            self._model = None
+            return False
 
     # ------------------------------------------------------------------
     # Video source management
@@ -153,6 +196,8 @@ class VehicleDetector:
 
     def open_source(self, source: int | str) -> bool:
         """Open a webcam or video file for frame capture.
+
+        If a previous source was open, it is released first.
 
         Parameters
         ----------
@@ -164,9 +209,32 @@ class VehicleDetector:
         bool
             ``True`` if the source opened successfully.
         """
-        # TODO: import cv2; self._cap = cv2.VideoCapture(source)
-        # TODO: Check cap.isOpened(); log and return result.
-        raise NotImplementedError("TODO: implement open_source()")
+        # Release any previous capture handle
+        if self._cap is not None:
+            self._cap.release()
+            logger.debug("Previous video source released.")
+
+        # Normalise: if source looks like an integer string, cast it
+        resolved_source = self._resolve_source(source)
+
+        logger.info(f"Opening video source: {resolved_source}")
+        self._cap = cv2.VideoCapture(resolved_source)
+
+        if not self._cap.isOpened():
+            logger.error(
+                f"Failed to open video source '{resolved_source}'. "
+                "Check that the path exists or the camera is connected."
+            )
+            self._cap = None
+            return False
+
+        width, height = self.get_frame_dimensions()
+        fps = self._cap.get(cv2.CAP_PROP_FPS) or 0.0
+        logger.info(
+            f"Video source opened: {width}x{height} @ {fps:.1f} FPS."
+        )
+        self._frame_id = 0
+        return True
 
     def read_frame(self) -> tuple[bool, Optional[np.ndarray]]:
         """Read the next frame from the video source.
@@ -177,8 +245,19 @@ class VehicleDetector:
             ``(success, frame)`` where ``frame`` is a BGR numpy array or
             ``None`` if reading failed.
         """
-        # TODO: ret, frame = self._cap.read(); self._frame_id += 1; return ret, frame
-        raise NotImplementedError("TODO: implement read_frame()")
+        if self._cap is None or not self._cap.isOpened():
+            logger.warning("read_frame() called but no video source is open.")
+            return False, None
+
+        ret, frame = self._cap.read()
+        if ret:
+            self._frame_id += 1
+        else:
+            logger.debug(
+                f"read_frame() returned empty at frame_id={self._frame_id}. "
+                "End of stream or camera error."
+            )
+        return ret, frame if ret else None
 
     def get_frame_dimensions(self) -> tuple[int, int]:
         """Return ``(width, height)`` of the video source frames.
@@ -186,19 +265,26 @@ class VehicleDetector:
         Returns
         -------
         tuple[int, int]
-            Frame dimensions in pixels.
+            Frame dimensions in pixels. ``(0, 0)`` if no source is open.
         """
-        # TODO: Query cap.get(cv2.CAP_PROP_FRAME_WIDTH/HEIGHT)
-        raise NotImplementedError("TODO: implement get_frame_dimensions()")
+        if self._cap is None:
+            return (0, 0)
+        width = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        return (width, height)
 
     def release(self) -> None:
         """Release the video capture resource.
 
         Must be called when the processing loop ends to free the camera or
-        file handle.
+        file handle. Safe to call multiple times.
         """
-        # TODO: if self._cap: self._cap.release(); log.
-        raise NotImplementedError("TODO: implement release()")
+        if self._cap is not None:
+            self._cap.release()
+            logger.info(
+                f"Video source released after {self._frame_id} frames."
+            )
+            self._cap = None
 
     # ------------------------------------------------------------------
     # Detection
@@ -218,34 +304,87 @@ class VehicleDetector:
             All detected vehicle objects for this frame, filtered to
             ``self._target_class_ids`` and confidence threshold.
         """
-        # TODO: results = self._model(frame, conf=threshold, iou=iou, device=device)
-        # TODO: Parse results.boxes; filter by target class IDs.
-        # TODO: Build DetectedVehicle instances and return list.
-        raise NotImplementedError("TODO: implement detect_frame()")
+        if self._model is None:
+            logger.error("detect_frame() called but model is not loaded.")
+            return []
+
+        # Run YOLOv8 inference – verbose=False suppresses the built-in
+        # Ultralytics progress prints that clutter production logs.
+        results = self._model(
+            frame,
+            conf=self._confidence_threshold,
+            iou=self._iou_threshold,
+            device=self._device,
+            verbose=False,
+        )
+
+        detections: list[DetectedVehicle] = []
+        current_time = time.time()
+
+        for result in results:
+            if result.boxes is None:
+                continue
+            for box in result.boxes:
+                vehicle = self._parse_detection(box, self._frame_id, current_time)
+                if vehicle is not None:
+                    detections.append(vehicle)
+
+        if detections:
+            logger.debug(
+                f"Frame {self._frame_id}: detected {len(detections)} vehicle(s)."
+            )
+        return detections
 
     def _parse_detection(
         self,
-        box: "ultralytics.engine.results.Boxes",  # type: ignore[name-defined]
+        box: Any,
         frame_id: int,
+        timestamp: float,
     ) -> Optional[DetectedVehicle]:
         """Convert a single YOLO result box to a ``DetectedVehicle``.
 
         Parameters
         ----------
-        box : ultralytics Boxes object
+        box : ultralytics Boxes element
             A single detection box from a YOLO result.
         frame_id : int
             Current frame counter.
+        timestamp : float
+            Unix epoch seconds shared across all detections in this frame.
 
         Returns
         -------
         Optional[DetectedVehicle]
-            Parsed vehicle, or ``None`` if the class is not a target vehicle.
+            Parsed vehicle, or ``None`` if the class is not a target vehicle
+            type.
         """
-        # TODO: Extract class_id, confidence, xyxy coords.
-        # TODO: Map class_id via COCO_CLASS_ID_TO_VEHICLE_TYPE; skip if absent.
-        # TODO: Construct and return DetectedVehicle.
-        raise NotImplementedError("TODO: implement _parse_detection()")
+        # Extract scalar values from single-element tensors
+        class_id = int(box.cls.item())
+
+        # Skip classes not in our target set
+        if class_id not in self._target_class_ids:
+            return None
+
+        vehicle_type = COCO_CLASS_ID_TO_VEHICLE_TYPE.get(class_id)
+        if vehicle_type is None:
+            return None
+
+        confidence = float(box.conf.item())
+
+        # xyxy returns shape (1, 4) – squeeze to 1-D then cast to int
+        coords = box.xyxy.squeeze().tolist()
+        x1, y1, x2, y2 = int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3])
+
+        return DetectedVehicle(
+            vehicle_type=vehicle_type,
+            confidence=confidence,
+            x1=x1,
+            y1=y1,
+            x2=x2,
+            y2=y2,
+            frame_id=frame_id,
+            timestamp=timestamp,
+        )
 
     # ------------------------------------------------------------------
     # Annotation
@@ -255,6 +394,8 @@ class VehicleDetector:
         self, frame: np.ndarray, detections: list[DetectedVehicle]
     ) -> np.ndarray:
         """Draw bounding boxes and labels on a copy of ``frame``.
+
+        The original frame is never modified.
 
         Parameters
         ----------
@@ -268,10 +409,57 @@ class VehicleDetector:
         np.ndarray
             Annotated BGR frame (copy of input with drawings applied).
         """
-        # TODO: import cv2; annotated = frame.copy()
-        # TODO: For each detection draw rectangle + label using BOUNDING_BOX_COLORS.
-        # TODO: Return annotated frame.
-        raise NotImplementedError("TODO: implement annotate_frame()")
+        annotated = frame.copy()
+
+        for det in detections:
+            colour = BOUNDING_BOX_COLORS.get(det.vehicle_type, (255, 255, 255))
+
+            # Draw bounding box
+            cv2.rectangle(
+                annotated,
+                (det.x1, det.y1),
+                (det.x2, det.y2),
+                colour,
+                _BBOX_THICKNESS,
+            )
+
+            # Prepare label text
+            label = f"{det.vehicle_type.value} {det.confidence:.0%}"
+            (text_w, text_h), baseline = cv2.getTextSize(
+                label, _LABEL_FONT, _LABEL_FONT_SCALE, _LABEL_THICKNESS
+            )
+
+            # Draw a semi-transparent background rectangle for readability
+            label_y1 = max(det.y1 - text_h - baseline - 4, 0)
+            label_y2 = max(det.y1, text_h + baseline + 4)
+            overlay = annotated.copy()
+            cv2.rectangle(
+                overlay,
+                (det.x1, label_y1),
+                (det.x1 + text_w + 4, label_y2),
+                colour,
+                cv2.FILLED,
+            )
+            cv2.addWeighted(
+                overlay, _LABEL_BG_ALPHA,
+                annotated, 1 - _LABEL_BG_ALPHA,
+                0,
+                annotated,
+            )
+
+            # Draw label text
+            cv2.putText(
+                annotated,
+                label,
+                (det.x1 + 2, label_y2 - baseline - 2),
+                _LABEL_FONT,
+                _LABEL_FONT_SCALE,
+                (255, 255, 255),
+                _LABEL_THICKNESS,
+                lineType=cv2.LINE_AA,
+            )
+
+        return annotated
 
     # ------------------------------------------------------------------
     # Properties
@@ -285,5 +473,36 @@ class VehicleDetector:
     @property
     def is_open(self) -> bool:
         """Return ``True`` if the video source is currently open."""
-        # TODO: return self._cap is not None and self._cap.isOpened()
-        raise NotImplementedError("TODO: implement is_open property")
+        return self._cap is not None and self._cap.isOpened()
+
+    @property
+    def model_loaded(self) -> bool:
+        """Return ``True`` if the YOLO model has been loaded."""
+        return self._model is not None
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_source(source: int | str) -> int | str:
+        """Normalise the video source value for OpenCV.
+
+        Parameters
+        ----------
+        source : int | str
+            Either an integer camera index, a string file path, or a
+            string that looks like an integer (e.g. ``"0"``).
+
+        Returns
+        -------
+        int | str
+            Integer if the source is a camera index, string path otherwise.
+        """
+        if isinstance(source, int):
+            return source
+        # A string that is purely numeric is a camera index
+        try:
+            return int(source)
+        except (ValueError, TypeError):
+            return str(source)
