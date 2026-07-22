@@ -24,8 +24,8 @@ import cv2
 # ---------------------------------------------------------------------------
 # Internal imports (populated after skeletons are implemented)
 # ---------------------------------------------------------------------------
-from utils.logger import get_logger
-from utils.helpers import load_config
+from utils.logger import get_logger, setup_logging
+from utils.helpers import load_config, ensure_dir, get_config_value
 from modules.vehicle_detector import VehicleDetector
 from modules.vehicle_counter import VehicleCounter
 from modules.traffic_analyzer import TrafficAnalyzer
@@ -111,6 +111,7 @@ class TrafficManagementApp:
         self.controller: Optional[SignalController] = None
         self.predictor: Optional[CongestionPredictor] = None
         self.dashboard_data: Optional[DashboardData] = None
+        self._teardown_done: bool = False
 
         logger.info("TrafficManagementApp initialised.")
 
@@ -122,26 +123,26 @@ class TrafficManagementApp:
         bool
             True if setup succeeded, False otherwise.
         """
-        from utils.helpers import ensure_dir, get_config_value
-        
-        # Ensure log directory exists
         log_dir = get_config_value(self.config, "logging", "log_dir", default="data/logs")
         ensure_dir(log_dir)
+        ensure_dir("data/videos")
+        ensure_dir("data/results")
 
-        # Initialize VehicleDetector
         self.detector = VehicleDetector(self.config)
-        
-        # Load YOLO model
+
         if not self.detector.load_model():
             logger.error("Failed to load YOLO model.")
             return False
-            
-        # Open configured video source
+
         if not self.detector.open_source(self.source):
             logger.error(f"Failed to open video source: {self.source}")
             return False
-            
-        logger.info("Setup complete. Video source opened successfully.")
+
+        width, height = self.detector.get_frame_dimensions()
+        logger.info(
+            f"Setup complete. Source={self.source!r}, "
+            f"resolution={width}x{height}."
+        )
         return True
 
     def run(self) -> None:
@@ -159,47 +160,60 @@ class TrafficManagementApp:
         7. dashboard_data.update()
         8. Optional: display annotated frame
         """
+        if self.detector is None:
+            logger.error("Cannot run: detector not initialised. Call setup() first.")
+            return
+
         logger.info("Starting processing loop. Press 'q' to exit.")
         frames_processed = 0
         window_name = "Smart Traffic Management"
-        
+
         if not self.headless:
             cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
-        while self.detector and self.detector.is_open:
+        while self.detector.is_open:
             ret, frame = self.detector.read_frame()
             if not ret or frame is None:
                 logger.info("End of video stream or error reading frame.")
                 break
-                
+
             detections = self.detector.detect_frame(frame)
-            
-            # TODO: Implement other pipeline steps here later
-            
+
+            if detections:
+                logger.debug(
+                    f"Frame {self.detector.frame_id}: "
+                    f"{len(detections)} vehicle(s) detected."
+                )
+
             if not self.headless:
                 annotated = self.detector.annotate_frame(frame, detections)
                 cv2.imshow(window_name, annotated)
-                
-                # Exit on 'q'
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+
+                if cv2.waitKey(1) & 0xFF == ord("q"):
                     logger.info("Exit requested by user.")
                     break
-                    
+
             frames_processed += 1
-            
+
         logger.info(f"Session ended. Processed {frames_processed} frames.")
 
     def teardown(self) -> None:
         """Release resources (camera, DB connections, etc.).
 
         Called automatically at the end of run() or on KeyboardInterrupt.
+        Safe to call multiple times.
         """
-        if self.detector:
+        if self._teardown_done:
+            return
+
+        if self.detector is not None:
             self.detector.release()
-            
+            self.detector = None
+
         if not self.headless:
             cv2.destroyAllWindows()
-            
+
+        self._teardown_done = True
         logger.info("Application teardown complete.")
 
 
@@ -218,6 +232,14 @@ def main() -> None:
         sys.exit(1)
 
     config = load_config(str(config_path))
+
+    setup_logging(
+        level=get_config_value(config, "logging", "level", default="INFO"),
+        log_dir=get_config_value(config, "logging", "log_dir", default="data/logs"),
+        log_file=get_config_value(config, "logging", "log_file", default="traffic_system.log"),
+        rotation=get_config_value(config, "logging", "rotation", default="10 MB"),
+        retention=get_config_value(config, "logging", "retention", default="7 days"),
+    )
 
     app = TrafficManagementApp(
         config=config,
